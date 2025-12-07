@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Система заявок Школы №25</title>
+    <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Шапка -->
+        <header>
+            <div class="header-left">
+                <h1 id="appName">Система заявок Школы №25</h1>
+                <p class="subtitle" id="appSubtitle">Служба технической поддержки</p>
+            </div>
+            <div class="user-info">
+                <div class="user-details">
+                    <span id="userFullName" class="user-name">Загрузка...</span>
+                    <span id="userRole" class="user-role"></span>
+                </div>
+                <button id="logoutBtn" class="btn btn-secondary">Выйти</button>
+            </div>
+        </header>
+        
+        <!-- Навигация -->
+        <nav>
+            <a href="#" class="nav-link active" data-page="create">
+                <span class="nav-icon">➕</span>
+                <span class="nav-text">Создать заявку</span>
+            </a>
+            <a href="#" class="nav-link" data-page="my-tickets">
+                <span class="nav-icon">📋</span>
+                <span class="nav-text">Мои заявки</span>
+            </a>
+            <a href="#" class="nav-link admin-only" data-page="admin" style="display: none;">
+                <span class="nav-icon">⚙️</span>
+                <span class="nav-text">Админ панель</span>
+            </a>
+        </nav>
+        
+        <!-- Основной контент -->
+        <main>
+            <!-- Страница создания заявки -->
+            <div id="create-page" class="page active">
+                <p class="page-description">Заполните форму ниже для создания новой заявки. Все поля, отмеченные *, обязательны для заполнения.</p>
+                
+                <form id="ticketForm">
+                    <div class="form-group">
+                        <label for="problemType">
+                            Тип проблемы *
+                            <span class="hint">Выберите тип проблемы из списка</span>
+                        </label>
+                        <select id="problemType" name="problem_type_id" required>
+                            <option value="">Выберите тип проблемы...</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="cabinet">
+                            Номер кабинета *
+                            <span class="hint">Введите номер или выберите из списка</span>
+                        </label>
+                        <div class="cabinet-field">
+                            <input type="text" id="cabinet" name="cabinet" list="cabinetList" 
+                                   placeholder="Например: 205" required>
+                            <datalist id="cabinetList"></datalist>
+                            <button type="button" id="addCabinetBtn" class="btn btn-secondary admin-only" style="display: none;">
+                                Добавить кабинет
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="phone">
+                            Телефон для связи
+                            <span class="hint">Укажите номер для обратной связи</span>
+                        </label>
+                        <div class="contact-field">
+                            <input type="tel" id="phone" name="phone" 
+                                   placeholder="+7 (912) 272-60-19">
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="email">
+                            Email адрес
+                            <span class="hint">Укажите email для уведомлений</span>
+                        </label>
+                        <div class="contact-field">
+                            <input type="email" id="email" name="email" 
+                                   placeholder="kalugin66@ya.ru">
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="description">
+                            Описание проблемы *
+                            <span class="hint">Кратко опишите проблему, с которой столкнулись</span>
+                        </label>
+                        <textarea id="description" name="description" rows="4" 
+                                  placeholder="Опишите проблему максимально подробно..." required></textarea>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="comments">
+                            Дополнительные комментарии
+                            <span class="hint">Любая дополнительная информация</span>
+                        </label>
+                        <textarea id="comments" name="comments" rows="3" 
+                                  placeholder="Дополнительные сведения..."></textarea>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="files">
+                            Прикрепленные файлы
+                            <span class="hint">Максимум 7 файлов, общий размер до 50MB</span>
+                        </label>
+                        <input type="file" id="files" name="files" multiple 
+                               accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.txt">
+                        <div id="fileList" class="files-list"></div>
+                        <p class="file-hint">Разрешены: изображения, PDF, документы Word/Excel</p>
+                    </div>
+                    
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary">
+                            <span class="btn-icon">📨</span>
+                            Отправить заявку
+                        </button>
+                        <button type="reset" class="btn btn-secondary">
+                            <span class="btn-icon">🗑️</span>
+                            Очистить форму
+                        </button>
+                    </div>
+                </form>
+            </div>
+            
+            <!-- Страница моих заявок -->
+            <div id="my-tickets-page" class="page">
+                <p class="page-description">Здесь отображаются все ваши активные заявки.</p>
+                <div id="ticketsContainer">
+                    <div id="ticketsList"></div>
+                    <div id="noTickets" class="no-tickets" style="display: none;">
+                        <p>У вас пока нет заявок</p>
+                        <a href="#" class="btn btn-primary" data-page="create">Создать первую заявку</a>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Админ панель -->
+            <div id="admin-page" class="page">
+                <h2><span class="page-icon">⚙️</span> Панель администратора</h2>
+                <p class="page-description">Управление всеми заявками системы. Только для администраторов.</p>
+                
+                <div class="admin-controls">
+                    <div class="admin-stats" id="adminStats">
+                        <div class="stat-item">
+                            <span class="stat-value" id="totalTickets">0</span>
+                            <span class="stat-label">Всего заявок</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-value" id="openTickets">0</span>
+                            <span class="stat-label">Открытые</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-value" id="inProgressTickets">0</span>
+                            <span class="stat-label">В работе</span>
+                        </div>
+                    </div>
+                    
+                    <div class="admin-filters">
+                        <input type="text" id="searchTickets" placeholder="Поиск заявок..." class="search-input">
+                        <select id="filterStatus" class="filter-select">
+                            <option value="">Все статусы</option>
+                            <option value="открыта">Открыта</option>
+                            <option value="в работе">В работе</option>
+                            <option value="назначена">Назначена</option>
+                            <option value="требует уточнения">Требует уточнения</option>
+                            <option value="отложена">Отложена</option>
+                            <option value="выполнена">Выполнена</option>
+                            <option value="закрыта">Закрыта</option>
+                            <option value="отказана">Отказана</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div id="adminTicketsContainer">
+                    <div class="loading" id="loadingAdminTickets">
+                        <p>Загрузка заявок...</p>
+                    </div>
+                    <table id="adminTicketsTable" class="tickets-table" style="display: none;">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Дата</th>
+                                <th>Пользователь</th>
+                                <th>Тип</th>
+                                <th>Кабинет</th>
+                                <th>Статус</th>
+                                <th>Действия</th>
+                            </tr>
+                        </thead>
+                        <tbody id="adminTicketsBody"></tbody>
+                    </table>
+                    <div id="noAdminTickets" class="no-tickets" style="display: none;">
+                        <p>Нет заявок для отображения</p>
+                    </div>
+                </div>
+            </div>
+        </main>
+        
+        <!-- Футер -->
+        <footer>
+            <p id="footerText">
+                Служба технической поддержки Школы №25 | Версия: <span id="appVersion">0.2</span>
+            </p>
+            <p class="footer-info" id="footerInfo">
+            Поддержка: <a href="mailto:kalugin66@ya.ru" id="supportEmail">kalugin66@ya.ru</a> 
+            | Тел: <span id="supportPhone">+7 (912) 272-60-19</span>
+            </p>
+            <p id="footerText">&copy; 2025. Все права защищены.</p>
+        </footer>
+    </div>
+    
+    <!-- Модальное окно для деталей заявки -->
+    <div id="ticketDetailsModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Детали заявки #<span id="modalTicketId"></span></h3>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body" id="modalTicketDetails">
+                <!-- Детали загрузятся динамически -->
+            </div>
+        </div>
+    </div>
+    
+    <!-- Модальное окно для просмотра файлов -->
+    <div id="filesModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Файлы заявки #<span id="filesTicketId"></span></h3>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="filesList" class="files-list"></div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Модальное окно для назначения исполнителя -->
+    <div id="assignModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Назначение исполнителя</h3>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="assignForm">
+                    <input type="hidden" id="assignTicketId">
+                    <div class="form-group">
+                        <label for="assignMainExecutor">Главный исполнитель *</label>
+                        <input type="text" id="assignMainExecutor" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="assignExecutor">Дополнительный исполнитель</label>
+                        <input type="text" id="assignExecutor">
+                    </div>
+                    <div class="form-group">
+                        <label for="assignComment">Комментарий к назначению</label>
+                        <textarea id="assignComment" rows="3"></textarea>
+                    </div>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary">Назначить</button>
+                        <button type="button" class="btn btn-secondary modal-close">Отмена</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Модальное окно для изменения статуса -->
+    <div id="statusModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Изменение статуса</h3>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="statusForm">
+                    <input type="hidden" id="statusTicketId">
+                    <div class="form-group">
+                        <label for="newStatus">Новый статус *</label>
+                        <select id="newStatus" required>
+                            <option value="">Выберите статус...</option>
+                            <option value="открыта">Открыта</option>
+                            <option value="в работе">В работе</option>
+                            <option value="назначена">Назначена</option>
+                            <option value="требует уточнения">Требует уточнения</option>
+                            <option value="отложена">Отложена</option>
+                            <option value="выполнена">Выполнена</option>
+                            <option value="закрыта">Закрыта</option>
+                            <option value="отказана">Отказана</option>
+                            <option value="архив">Архив</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="statusComment">Комментарий к изменению статуса</label>
+                        <textarea id="statusComment" rows="3"></textarea>
+                    </div>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary">Изменить статус</button>
+                        <button type="button" class="btn btn-secondary modal-close">Отмена</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Подключаем скрипты -->
+    <script src="/scripts/utils.js"></script>
+    <script src="/scripts/auth.js"></script>
+    <script src="/scripts/ticket.js"></script>
+    <script src="/scripts/dashboard.js"></script>
+    
+    <script>
+        // Загрузка информации о приложении
+        async function loadAppInfo() {
+            try {
+                const response = await fetch('/api/app-info');
+                if (response.ok) {
+                    const data = await response.json();
+                    
+                    // Обновляем название приложения
+                    document.title = data.name;
+                    document.getElementById('appName').textContent = data.name;
+                    document.getElementById('footerText').textContent = 
+                        `${data.name} © ${new Date().getFullYear()}. Все права защищены.`;
+                    
+                    // Обновляем версию
+                    if (data.version) {
+                        document.getElementById('appVersion').textContent = data.version;
+                    }
+                    
+                    // Обновляем контактную информацию
+                    if (data.supportEmail) {
+                        const emailLink = document.getElementById('supportEmail');
+                        emailLink.href = `mailto:${data.supportEmail}`;
+                        emailLink.textContent = data.supportEmail;
+                    }
+                    
+                    if (data.supportPhone) {
+                        document.getElementById('supportPhone').textContent = data.supportPhone;
+                    }
+                    
+                    return data;
+                }
+            } catch (error) {
+                console.error('Error loading app info:', error);
+            }
+            return null;
+        }
+        
+        // Инициализация при загрузке страницы
+        document.addEventListener('DOMContentLoaded', async () => {
+            // Загружаем информацию о приложении
+            await loadAppInfo();
+            
+            // Инициализируем другие модули
+            if (typeof initApp === 'function') {
+                initApp();
+            }
+        });
+        
+        // Функция для получения иконки файла по расширению
+        function getFileIcon(fileName) {
+            const ext = fileName.split('.').pop().toLowerCase();
+            const iconMap = {
+                'jpg': '🖼️', 'jpeg': '🖼️', 'png': '🖼️', 'gif': '🖼️', 'bmp': '🖼️',
+                'pdf': '📄',
+                'doc': '📝', 'docx': '📝',
+                'xls': '📊', 'xlsx': '📊',
+                'txt': '📃'
+            };
+            return iconMap[ext] || '📎';
+        }
+        
+        // Функция для форматирования размера файла
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+        
+        // Функция для отображения уведомлений
+        function showNotification(message, type = 'info') {
+            // Удаляем предыдущие уведомления
+            const oldNotifications = document.querySelectorAll('.notification');
+            oldNotifications.forEach(n => n.remove());
+            
+            // Создаем новое уведомление
+            const notification = document.createElement('div');
+            notification.className = `notification notification-${type}`;
+            notification.textContent = message;
+            notification.style.cssText = `
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                padding: 15px 20px;
+                border-radius: 8px;
+                z-index: 1000;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                animation: slideIn 0.3s ease-out;
+            `;
+            
+            document.body.appendChild(notification);
+            
+            // Удаляем через 5 секунд
+            setTimeout(() => {
+                notification.style.animation = 'slideOut 0.3s ease-out';
+                setTimeout(() => notification.remove(), 300);
+            }, 5000);
+        }
+        
+        // Добавляем стили для анимаций
+        const style = document.createElement('style');
+        style.textContent = `
+            @keyframes slideIn {
+                from {
+                    transform: translateX(100%);
+                    opacity: 0;
+                }
+                to {
+                    transform: translateX(0);
+                    opacity: 1;
+                }
+            }
+            
+            @keyframes slideOut {
+                from {
+                    transform: translateX(0);
+                    opacity: 1;
+                }
+                to {
+                    transform: translateX(100%);
+                    opacity: 0;
+                }
+            }
+            
+            @keyframes fadeIn {
+                from { opacity: 0; transform: translateY(10px); }
+                to { opacity: 1; transform: translateY(0); }
+            }
+            
+            .fade-in {
+                animation: fadeIn 0.5s ease-in;
+            }
+            
+            .files-list {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 10px;
+                margin-top: 15px;
+            }
+            
+            .file-item {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                padding: 10px 15px;
+                background: #f8f9fa;
+                border-radius: 8px;
+                border: 1px solid #dee2e6;
+                width: 100%;
+                max-width: 400px;
+            }
+            
+            .remove-file-btn {
+                background: #dc3545;
+                color: white;
+                border: none;
+                border-radius: 50%;
+                width: 26px;
+                height: 26px;
+                cursor: pointer;
+                font-size: 18px;
+                line-height: 1;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                transition: all 0.3s ease;
+            }
+            
+            .remove-file-btn:hover {
+                background: #c82333;
+            }
+            
+            .file-link {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                padding: 10px 15px;
+                background: #f8f9fa;
+                border: 1px solid #dee2e6;
+                border-radius: 8px;
+                text-decoration: none;
+                color: #495057;
+                font-size: 15px;
+                transition: all 0.3s ease;
+            }
+            
+            .file-link:hover {
+                background: #e9ecef;
+                text-decoration: none;
+                transform: translateY(-1px);
+            }
+            
+            .file-download-btn {
+                background: #007bff;
+                color: white;
+                border: none;
+                border-radius: 8px;
+                padding: 6px 12px;
+                font-size: 13px;
+                cursor: pointer;
+                text-decoration: none;
+                transition: all 0.3s ease;
+            }
+            
+            .file-download-btn:hover {
+                background: #0056b3;
+                color: white;
+            }
+        `;
+        document.head.appendChild(style);
+        
+        // Экспортируем функции для глобального доступа
+        window.getFileIcon = getFileIcon;
+        window.formatFileSize = formatFileSize;
+        window.showNotification = showNotification;
+    </script>
+</body>
+</html>
