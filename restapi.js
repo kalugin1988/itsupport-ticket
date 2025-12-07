@@ -24,6 +24,18 @@ const verifyApiKey = (req, res, next) => {
     next();
 };
 
+// Валидация статусов
+const validStatuses = [
+    'открыта', 'в работе', 'назначена', 'требует уточнения', 
+    'отложена', 'выполнена', 'закрыта', 'отказана', 'архив'
+];
+
+function validateStatus(status) {
+    return validStatuses.includes(status);
+}
+
+// ========== GET МЕТОДЫ ==========
+
 // Получение списка всех заявок с пагинацией
 router.get('/tickets', verifyApiKey, async (req, res) => {
     try {
@@ -82,7 +94,11 @@ router.get('/tickets', verifyApiKey, async (req, res) => {
                 login: ticket.user_login,
                 full_name: ticket.user_full_name
             },
-            problem_type: ticket.problem_type_name
+            problem_type: ticket.problem_type_name,
+            _links: {
+                self: `/api/v1/tickets/${ticket.id}`,
+                update_status: `/api/v1/tickets/${ticket.id}/status`
+            }
         }));
         
         res.json({
@@ -188,9 +204,10 @@ router.get('/tickets/:id', verifyApiKey, async (req, res) => {
                 completed_at: ticket.completed_at,
                 archived_at: ticket.archived_at,
                 files: files.map(filePath => ({
-                    url: `http://${req.headers.host}${filePath}`,
+                    url: `${req.protocol}://${req.headers.host}${filePath}`,
                     path: filePath,
-                    filename: filePath.split('/').pop()
+                    filename: filePath.split('/').pop(),
+                    download_url: `${req.protocol}://${req.headers.host}/api/v1/tickets/${ticketId}/files/${filePath.split('/').pop()}/download`
                 })),
                 user: {
                     id: ticket.user_id,
@@ -212,6 +229,16 @@ router.get('/tickets/:id', verifyApiKey, async (req, res) => {
                     in_progress: ticket.in_progress_at,
                     completed: ticket.completed_at,
                     archived: ticket.archived_at
+                },
+                _links: {
+                    self: `/api/v1/tickets/${ticketId}`,
+                    update_status: `/api/v1/tickets/${ticketId}/status`,
+                    assign: `/api/v1/tickets/${ticketId}/assign`
+                },
+                _actions: {
+                    allowed_statuses: validStatuses.filter(s => s !== ticket.status),
+                    can_assign: !ticket.main_executor,
+                    can_archive: ticket.status !== 'архив'
                 }
             },
             meta: {
@@ -224,6 +251,420 @@ router.get('/tickets/:id', verifyApiKey, async (req, res) => {
         
     } catch (error) {
         console.error('API Error getting ticket:', error);
+        res.status(500).json({
+            error: 'Внутренняя ошибка сервера',
+            message: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+});
+
+// ========== PUT/PATCH МЕТОДЫ ДЛЯ ИЗМЕНЕНИЯ СТАТУСА ==========
+
+// Получение текущего статуса заявки
+router.get('/tickets/:id/status', verifyApiKey, async (req, res) => {
+    try {
+        const ticketId = req.params.id;
+        
+        const sql = `SELECT status FROM tickets WHERE id = ${db.dbType === 'postgres' ? '$1' : '?'}`;
+        const tickets = await db.query(sql, [ticketId]);
+        
+        if (tickets.length === 0) {
+            return res.status(404).json({
+                error: 'Заявка не найдена',
+                message: `Заявка с ID ${ticketId} не существует`
+            });
+        }
+        
+        res.json({
+            success: true,
+            data: {
+                ticket_id: ticketId,
+                current_status: tickets[0].status,
+                allowed_statuses: validStatuses,
+                _links: {
+                    update: `/api/v1/tickets/${ticketId}/status`,
+                    ticket: `/api/v1/tickets/${ticketId}`
+                }
+            },
+            meta: {
+                timestamp: new Date().toISOString()
+            }
+        });
+        
+    } catch (error) {
+        console.error('API Error getting ticket status:', error);
+        res.status(500).json({
+            error: 'Внутренняя ошибка сервера',
+            message: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+});
+
+// Изменение статуса заявки
+router.put('/tickets/:id/status', verifyApiKey, async (req, res) => {
+    try {
+        const ticketId = req.params.id;
+        const { status, comment, changed_by } = req.body;
+        
+        // Валидация входных данных
+        if (!status) {
+            return res.status(400).json({
+                error: 'Не указан статус',
+                message: 'Поле status обязательно для заполнения'
+            });
+        }
+        
+        if (!validateStatus(status)) {
+            return res.status(400).json({
+                error: 'Неверный статус',
+                message: `Допустимые значения статуса: ${validStatuses.join(', ')}`,
+                allowed_statuses: validStatuses
+            });
+        }
+        
+        // Проверяем существование заявки
+        const checkSql = `SELECT status, comments FROM tickets WHERE id = ${db.dbType === 'postgres' ? '$1' : '?'}`;
+        const tickets = await db.query(checkSql, [ticketId]);
+        
+        if (tickets.length === 0) {
+            return res.status(404).json({
+                error: 'Заявка не найдена',
+                message: `Заявка с ID ${ticketId} не существует`
+            });
+        }
+        
+        const currentTicket = tickets[0];
+        const oldStatus = currentTicket.status;
+        
+        // Если статус не изменился
+        if (oldStatus === status) {
+            return res.status(400).json({
+                error: 'Статус не изменился',
+                message: `Текущий статус уже "${status}"`,
+                data: {
+                    ticket_id: ticketId,
+                    status: status
+                }
+            });
+        }
+        
+        // Обновляем статус
+        await db.updateTicketStatus(ticketId, status);
+        
+        // Добавляем комментарий, если он есть
+        let newComments = currentTicket.comments || '';
+        if (comment && comment.trim() !== '') {
+            const changedBy = changed_by || 'API Система';
+            const statusComment = `\n[Смена статуса через API от ${changedBy}]: ${comment.trim()} (${new Date().toLocaleString()})`;
+            newComments += statusComment;
+            await db.updateTicketInfo(ticketId, { comments: newComments });
+        }
+        
+        // Логируем изменение статуса
+        console.log(`[API] Статус заявки #${ticketId} изменен с "${oldStatus}" на "${status}"`);
+        
+        // Получаем обновленную заявку
+        const updatedSql = `
+            SELECT t.*, u.login as user_login, u.full_name as user_full_name
+            FROM tickets t
+            LEFT JOIN users u ON t.user_id = u.id
+            WHERE t.id = ${db.dbType === 'postgres' ? '$1' : '?'}
+        `;
+        const updatedTickets = await db.query(updatedSql, [ticketId]);
+        const updatedTicket = updatedTickets[0];
+        
+        res.json({
+            success: true,
+            message: 'Статус заявки успешно обновлен',
+            data: {
+                ticket_id: ticketId,
+                old_status: oldStatus,
+                new_status: status,
+                changed_at: new Date().toISOString(),
+                changed_by: changed_by || 'API Система',
+                comment: comment || null,
+                ticket: {
+                    id: updatedTicket.id,
+                    status: updatedTicket.status,
+                    cabinet: updatedTicket.cabinet,
+                    description: updatedTicket.description,
+                    user: {
+                        login: updatedTicket.user_login,
+                        full_name: updatedTicket.user_full_name
+                    },
+                    timestamps: {
+                        created: updatedTicket.created_at,
+                        assigned: updatedTicket.assigned_at,
+                        in_progress: updatedTicket.in_progress_at,
+                        completed: updatedTicket.completed_at
+                    }
+                },
+                _links: {
+                    ticket: `/api/v1/tickets/${ticketId}`,
+                    status_history: `/api/v1/tickets/${ticketId}/status/history`
+                }
+            },
+            meta: {
+                timestamp: new Date().toISOString(),
+                request_id: req.headers['x-request-id'] || generateRequestId()
+            }
+        });
+        
+    } catch (error) {
+        console.error('API Error updating ticket status:', error);
+        res.status(500).json({
+            error: 'Внутренняя ошибка сервера',
+            message: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+});
+
+// Альтернативный метод для изменения статуса (PATCH)
+router.patch('/tickets/:id', verifyApiKey, async (req, res) => {
+    try {
+        const ticketId = req.params.id;
+        const { status, comment, changed_by, ...otherFields } = req.body;
+        
+        // Если в запросе есть статус, меняем его
+        if (status) {
+            if (!validateStatus(status)) {
+                return res.status(400).json({
+                    error: 'Неверный статус',
+                    message: `Допустимые значения статуса: ${validStatuses.join(', ')}`
+                });
+            }
+            
+            // Проверяем существование заявки
+            const checkSql = `SELECT status, comments FROM tickets WHERE id = ${db.dbType === 'postgres' ? '$1' : '?'}`;
+            const tickets = await db.query(checkSql, [ticketId]);
+            
+            if (tickets.length === 0) {
+                return res.status(404).json({
+                    error: 'Заявка не найдена'
+                });
+            }
+            
+            const currentTicket = tickets[0];
+            
+            // Обновляем статус
+            await db.updateTicketStatus(ticketId, status);
+            
+            // Добавляем комментарий
+            if (comment && comment.trim() !== '') {
+                const changedBy = changed_by || 'API Система';
+                const newComments = (currentTicket.comments || '') + 
+                    `\n[Обновление через API от ${changedBy}]: ${comment.trim()} (${new Date().toLocaleString()})`;
+                await db.updateTicketInfo(ticketId, { comments: newComments });
+            }
+        }
+        
+        // Обновляем другие поля, если они есть
+        if (Object.keys(otherFields).length > 0) {
+            // Проверяем разрешенные поля для обновления
+            const allowedFields = ['main_executor', 'executor', 'comments', 'description'];
+            const updates = {};
+            
+            for (const [key, value] of Object.entries(otherFields)) {
+                if (allowedFields.includes(key)) {
+                    updates[key] = value;
+                }
+            }
+            
+            if (Object.keys(updates).length > 0) {
+                await db.updateTicketInfo(ticketId, updates);
+            }
+        }
+        
+        // Получаем обновленную заявку
+        const updatedSql = `SELECT * FROM tickets WHERE id = ${db.dbType === 'postgres' ? '$1' : '?'}`;
+        const updatedTickets = await db.query(updatedSql, [ticketId]);
+        
+        res.json({
+            success: true,
+            message: 'Заявка успешно обновлена',
+            data: updatedTickets[0],
+            meta: {
+                timestamp: new Date().toISOString()
+            }
+        });
+        
+    } catch (error) {
+        console.error('API Error updating ticket:', error);
+        res.status(500).json({
+            error: 'Внутренняя ошибка сервера',
+            message: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+});
+
+// Назначение исполнителя
+router.put('/tickets/:id/assign', verifyApiKey, async (req, res) => {
+    try {
+        const ticketId = req.params.id;
+        const { main_executor, executor, comment, assigned_by } = req.body;
+        
+        if (!main_executor) {
+            return res.status(400).json({
+                error: 'Не указан главный исполнитель',
+                message: 'Поле main_executor обязательно для заполнения'
+            });
+        }
+        
+        // Проверяем существование заявки
+        const checkSql = `SELECT status, comments, main_executor FROM tickets WHERE id = ${db.dbType === 'postgres' ? '$1' : '?'}`;
+        const tickets = await db.query(checkSql, [ticketId]);
+        
+        if (tickets.length === 0) {
+            return res.status(404).json({
+                error: 'Заявка не найдена'
+            });
+        }
+        
+        const currentTicket = tickets[0];
+        
+        // Обновляем исполнителей
+        const updates = {
+            main_executor: main_executor.trim(),
+            executor: executor ? executor.trim() : null,
+            assigned_at: new Date().toISOString()
+        };
+        
+        await db.updateTicketInfo(ticketId, updates);
+        
+        // Меняем статус на "назначена", если он еще "открыта"
+        if (currentTicket.status === 'открыта') {
+            await db.updateTicketStatus(ticketId, 'назначена');
+        }
+        
+        // Добавляем комментарий
+        if (comment && comment.trim() !== '') {
+            const assignedBy = assigned_by || 'API Система';
+            const newComments = (currentTicket.comments || '') + 
+                `\n[Назначение через API от ${assignedBy}]: ${comment.trim()} (${new Date().toLocaleString()})`;
+            await db.updateTicketInfo(ticketId, { comments: newComments });
+        }
+        
+        // Получаем обновленную заявку
+        const updatedSql = `SELECT * FROM tickets WHERE id = ${db.dbType === 'postgres' ? '$1' : '?'}`;
+        const updatedTickets = await db.query(updatedSql, [ticketId]);
+        
+        res.json({
+            success: true,
+            message: 'Исполнитель успешно назначен',
+            data: {
+                ticket_id: ticketId,
+                main_executor: main_executor,
+                executor: executor,
+                assigned_at: updates.assigned_at,
+                assigned_by: assigned_by || 'API Система',
+                ticket: updatedTickets[0]
+            },
+            meta: {
+                timestamp: new Date().toISOString()
+            }
+        });
+        
+    } catch (error) {
+        console.error('API Error assigning ticket:', error);
+        res.status(500).json({
+            error: 'Внутренняя ошибка сервера',
+            message: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+});
+
+// ========== ДОПОЛНИТЕЛЬНЫЕ МЕТОДЫ ==========
+
+// Получение истории изменений статуса (упрощенная версия)
+router.get('/tickets/:id/status/history', verifyApiKey, async (req, res) => {
+    try {
+        const ticketId = req.params.id;
+        
+        // В реальном приложении здесь нужно иметь таблицу для истории изменений
+        // Для демонстрации вернем текущий статус и информацию из комментариев
+        const sql = `
+            SELECT 
+                status,
+                comments,
+                assigned_at,
+                in_progress_at,
+                completed_at,
+                archived_at,
+                created_at
+            FROM tickets 
+            WHERE id = ${db.dbType === 'postgres' ? '$1' : '?'}
+        `;
+        
+        const tickets = await db.query(sql, [ticketId]);
+        
+        if (tickets.length === 0) {
+            return res.status(404).json({
+                error: 'Заявка не найдена'
+            });
+        }
+        
+        const ticket = tickets[0];
+        
+        // Формируем историю из временных меток
+        const history = [
+            {
+                status: 'создана',
+                timestamp: ticket.created_at,
+                type: 'creation'
+            }
+        ];
+        
+        if (ticket.assigned_at) {
+            history.push({
+                status: 'назначена',
+                timestamp: ticket.assigned_at,
+                type: 'assignment'
+            });
+        }
+        
+        if (ticket.in_progress_at) {
+            history.push({
+                status: 'в работе',
+                timestamp: ticket.in_progress_at,
+                type: 'progress'
+            });
+        }
+        
+        if (ticket.completed_at) {
+            history.push({
+                status: 'выполнена',
+                timestamp: ticket.completed_at,
+                type: 'completion'
+            });
+        }
+        
+        if (ticket.archived_at) {
+            history.push({
+                status: 'архив',
+                timestamp: ticket.archived_at,
+                type: 'archival'
+            });
+        }
+        
+        // Сортируем по времени
+        history.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+        
+        res.json({
+            success: true,
+            data: {
+                ticket_id: ticketId,
+                current_status: ticket.status,
+                history: history,
+                comment_analysis: ticket.comments ? 'Комментарии содержат историю изменений' : 'Нет комментариев'
+            },
+            meta: {
+                timestamp: new Date().toISOString(),
+                note: 'Для полной истории необходима отдельная таблица статусов'
+            }
+        });
+        
+    } catch (error) {
+        console.error('API Error getting status history:', error);
         res.status(500).json({
             error: 'Внутренняя ошибка сервера',
             message: process.env.NODE_ENV === 'development' ? error.message : undefined
@@ -257,25 +698,13 @@ router.get('/stats', verifyApiKey, async (req, res) => {
             ORDER BY count DESC
         `);
         
-        // Статистика по дням (последние 30 дней)
-        const daysStats = await db.query(`
-            SELECT 
-                DATE(created_at) as date,
-                COUNT(*) as count
-            FROM tickets
-            WHERE created_at >= DATE('now', '-30 days')
-            AND status != 'архив'
-            GROUP BY DATE(created_at)
-            ORDER BY date DESC
-        `);
-        
         res.json({
             success: true,
             data: {
                 total_tickets: total,
                 by_status: statusStats,
                 by_problem_type: typeStats,
-                last_30_days: daysStats
+                status_options: validStatuses
             },
             meta: {
                 timestamp: new Date().toISOString(),
@@ -366,38 +795,7 @@ router.get('/search', verifyApiKey, async (req, res) => {
     }
 });
 
-// Получение пользователей
-router.get('/users', verifyApiKey, async (req, res) => {
-    try {
-        const users = await db.query(`
-            SELECT 
-                id,
-                login,
-                full_name,
-                role,
-                created_at,
-                updated_at
-            FROM users
-            ORDER BY created_at DESC
-        `);
-        
-        res.json({
-            success: true,
-            data: users,
-            meta: {
-                count: users.length,
-                timestamp: new Date().toISOString()
-            }
-        });
-        
-    } catch (error) {
-        console.error('API Error getting users:', error);
-        res.status(500).json({
-            error: 'Внутренняя ошибка сервера',
-            message: process.env.NODE_ENV === 'development' ? error.message : undefined
-        });
-    }
-});
+// ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 
 // Генерация ID запроса
 function generateRequestId() {

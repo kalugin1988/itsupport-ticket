@@ -220,11 +220,14 @@ app.get('/ticket/:id', requireAuth, (req, res) => {
 });
 
 // Документация API
+
 app.get('/api/docs', (req, res) => {
     res.json({
         name: 'IT Support API',
         version: '1.0.0',
+        description: 'REST API для управления заявками технической поддержки',
         endpoints: {
+            // GET методы
             'GET /api/v1/tickets': {
                 description: 'Получить список всех заявок',
                 parameters: {
@@ -239,14 +242,68 @@ app.get('/api/docs', (req, res) => {
                 parameters: {
                     id: 'ID заявки',
                     'X-API-KEY': 'Секретный API ключ в заголовках'
-                },
-                example: 'curl -H "X-API-KEY: your_secret_key" http://localhost:3000/api/v1/tickets/1'
+                }
             },
-            'GET /api/v1/stats': {
-                description: 'Получить статистику по заявкам',
+            'GET /api/v1/tickets/:id/status': {
+                description: 'Получить текущий статус заявки',
                 parameters: {
+                    id: 'ID заявки',
                     'X-API-KEY': 'Секретный API ключ в заголовках'
                 }
+            },
+            
+            // PUT/PATCH методы
+            'PUT /api/v1/tickets/:id/status': {
+                description: 'Изменить статус заявки',
+                method: 'PUT',
+                parameters: {
+                    id: 'ID заявки',
+                    'X-API-KEY': 'Секретный API ключ в заголовках'
+                },
+                request_body: {
+                    status: 'Новый статус (обязательно)',
+                    comment: 'Комментарий к изменению статуса',
+                    changed_by: 'Кто изменил статус'
+                },
+                example: `curl -X PUT -H "Content-Type: application/json" -H "X-API-KEY: your_secret_key" \\
+  -d '{"status": "в работе", "comment": "Приступил к работе", "changed_by": "Интеграция"}' \\
+  http://localhost:3000/api/v1/tickets/1/status`
+            },
+            
+            'PATCH /api/v1/tickets/:id': {
+                description: 'Частичное обновление заявки',
+                method: 'PATCH',
+                parameters: {
+                    id: 'ID заявки',
+                    'X-API-KEY': 'Секретный API ключ в заголовках'
+                },
+                request_body: {
+                    status: 'Новый статус',
+                    main_executor: 'Главный исполнитель',
+                    executor: 'Дополнительный исполнитель',
+                    comment: 'Комментарий',
+                    description: 'Описание проблемы'
+                }
+            },
+            
+            'PUT /api/v1/tickets/:id/assign': {
+                description: 'Назначить исполнителя заявке',
+                method: 'PUT',
+                parameters: {
+                    id: 'ID заявки',
+                    'X-API-KEY': 'Секретный API ключ в заголовках'
+                },
+                request_body: {
+                    main_executor: 'Главный исполнитель (обязательно)',
+                    executor: 'Дополнительный исполнитель',
+                    comment: 'Комментарий к назначению',
+                    assigned_by: 'Кто назначил'
+                }
+            },
+            
+            // Другие методы
+            'GET /api/v1/stats': {
+                description: 'Получить статистику по заявкам'
             },
             'GET /api/v1/search': {
                 description: 'Поиск заявок',
@@ -254,21 +311,25 @@ app.get('/api/docs', (req, res) => {
                     q: 'Поисковый запрос',
                     status: 'Фильтр по статусу',
                     start_date: 'Дата начала (YYYY-MM-DD)',
-                    end_date: 'Дата окончания (YYYY-MM-DD)',
-                    'X-API-KEY': 'Секретный API ключ в заголовках'
-                }
-            },
-            'GET /api/v1/users': {
-                description: 'Получить список пользователей',
-                parameters: {
-                    'X-API-KEY': 'Секретный API ключ в заголовках'
+                    end_date: 'Дата окончания (YYYY-MM-DD)'
                 }
             }
+        },
+        status_codes: {
+            'открыта': 'Заявка создана',
+            'в работе': 'Исполнитель приступил к работе',
+            'назначена': 'Исполнитель назначен',
+            'требует уточнения': 'Требуется дополнительная информация',
+            'отложена': 'Работа отложена',
+            'выполнена': 'Работа выполнена',
+            'закрыта': 'Заявка закрыта',
+            'отказана': 'В выполнении отказано',
+            'архив': 'Заявка перемещена в архив'
         },
         authentication: {
             method: 'API Key',
             header: 'X-API-KEY',
-            parameter: 'api_key'
+            parameter: 'api_key (query parameter)'
         },
         rate_limiting: 'Без ограничений',
         contact: {
