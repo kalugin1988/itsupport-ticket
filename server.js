@@ -7,6 +7,7 @@ const db = require('./db');
 const auth = require('./auth');
 const tickets = require('./tickets');
 const restapi = require('./restapi');
+const fsService = require('./fs-service');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -125,6 +126,7 @@ app.put('/api/user/contacts', requireAuth, async (req, res) => {
         res.status(500).json({ error: 'Ошибка при обновлении контактов' });
     }
 });
+
 // ========== МАРШРУТЫ ДЛЯ ЗАЯВОК ==========
 
 // Создание заявки
@@ -143,7 +145,45 @@ app.put('/api/tickets/:id', requireAuth, tickets.updateTicket);
 app.post('/api/tickets/:id/files', requireAuth, tickets.addFilesToTicket);
 
 // Удаление файла из заявки
-app.delete('/api/tickets/:ticketId/files/:filename', requireAuth, tickets.deleteTicketFile);
+app.delete('/api/tickets/:ticketId/files/:fileNumber', requireAuth, tickets.deleteTicketFile);
+
+// Скачивание файла через прокси
+app.get('/api/tickets/:id/files/:fileNumber/download', requireAuth, async (req, res) => {
+    try {
+        const { id: ticketId, fileNumber } = req.params;
+        
+        const ticket = await db.getTicketById(ticketId, req.session.user.id);
+        if (!ticket) {
+            return res.status(404).json({ error: 'Заявка не найдена' });
+        }
+        
+        const isOwner = ticket.user_id === req.session.user.id;
+        const isAdmin = req.session.user.role === 'admin';
+        
+        if (!isOwner && !isAdmin) {
+            return res.status(403).json({ error: 'Нет доступа к этой заявке' });
+        }
+        
+        // Перенаправляем на FS с токеном
+        const downloadUrl = `${process.env.FS_BASE_URL}/api/download/${fileNumber}`;
+        
+        // Для браузеров - перенаправление
+        if (req.headers.accept?.includes('text/html')) {
+            return res.redirect(downloadUrl);
+        }
+        
+        // Для API - возвращаем URL
+        res.json({ 
+            success: true, 
+            downloadUrl: downloadUrl,
+            directUrl: `${process.env.FS_BASE_URL}/api/download/${fileNumber}?token=${process.env.FS_TOKEN?.substring(0, 8)}...`
+        });
+        
+    } catch (error) {
+        console.error('Download file error:', error);
+        res.status(500).json({ error: 'Ошибка при скачивании файла' });
+    }
+});
 
 // ========== СПРАВОЧНИКИ ==========
 
@@ -155,9 +195,6 @@ app.get('/api/cabinets', requireAuth, tickets.getCabinets);
 
 // Добавление нового кабинета
 app.post('/api/cabinets', requireAuth, requireAdmin, tickets.addCabinet);
-
-// Контакты пользователя
-app.get('/api/user-contacts', requireAuth, tickets.getUserContacts);
 
 // ========== АДМИНИСТРАТИВНЫЕ МАРШРУТЫ ==========
 
@@ -197,6 +234,73 @@ app.get('/api/admin/search', requireAuth, requireAdmin, async (req, res) => {
     }
 });
 
+// ========== ФАЙЛОВЫЙ СЕРВИС ==========
+
+// Статус файлового сервиса
+app.get('/api/fs/status', requireAuth, async (req, res) => {
+    try {
+        const status = await fsService.checkConnection();
+        res.json(status);
+    } catch (error) {
+        console.error('FS status error:', error);
+        res.status(500).json({ 
+            connected: false, 
+            error: error.message 
+        });
+    }
+});
+
+// Статистика файлового сервиса
+app.get('/api/fs/stats', requireAuth, requireAdmin, async (req, res) => {
+    try {
+        const stats = await fsService.getStats();
+        res.json(stats);
+    } catch (error) {
+        console.error('FS stats error:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
+        });
+    }
+});
+
+// Поиск файлов в FS
+app.get('/api/fs/files', requireAuth, requireAdmin, async (req, res) => {
+    try {
+        const { login, service, date } = req.query;
+        
+        let url = `${process.env.FS_BASE_URL}/api/files`;
+        if (login) {
+            url = `${process.env.FS_BASE_URL}/api/files/${login}`;
+        }
+        
+        const params = new URLSearchParams();
+        if (service) params.append('service', service);
+        if (date) params.append('date', date);
+        
+        if (params.toString()) {
+            url += `?${params.toString()}`;
+        }
+        
+        const response = await fetch(url, {
+            headers: { 'X-API-Token': process.env.FS_TOKEN }
+        });
+        
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+        
+        const data = await response.json();
+        res.json(data);
+    } catch (error) {
+        console.error('FS files search error:', error);
+        res.status(500).json({ 
+            error: 'Ошибка при поиске файлов',
+            details: error.message 
+        });
+    }
+});
+
 // ========== ЗАЩИЩЕННЫЕ HTML СТРАНИЦЫ ==========
 
 // Главная страница (создание заявки)
@@ -220,7 +324,6 @@ app.get('/ticket/:id', requireAuth, (req, res) => {
 });
 
 // Документация API
-
 app.get('/api/docs', (req, res) => {
     res.json({
         name: 'IT Support API',
@@ -313,6 +416,16 @@ app.get('/api/docs', (req, res) => {
                     start_date: 'Дата начала (YYYY-MM-DD)',
                     end_date: 'Дата окончания (YYYY-MM-DD)'
                 }
+            },
+            
+            // Файловый сервис
+            'GET /api/fs/status': {
+                description: 'Получить статус подключения к файловому сервису',
+                authentication: 'Требуется авторизация'
+            },
+            'GET /api/fs/stats': {
+                description: 'Получить статистику файлового сервиса',
+                authentication: 'Требуются права администратора'
             }
         },
         status_codes: {
@@ -327,9 +440,16 @@ app.get('/api/docs', (req, res) => {
             'архив': 'Заявка перемещена в архив'
         },
         authentication: {
-            method: 'API Key',
-            header: 'X-API-KEY',
-            parameter: 'api_key (query parameter)'
+            web: 'Сессионные куки',
+            api: 'API Key в заголовке X-API-KEY',
+            fs: 'Статический токен из переменной окружения FS_TOKEN'
+        },
+        file_service: {
+            base_url: process.env.FS_BASE_URL || 'Не настроен',
+            service_name: process.env.FS_SERVICE_NAME || 'itsupport',
+            max_file_size: '100MB',
+            max_files_per_ticket: 10,
+            supported_formats: 'Изображения, документы, архивы'
         },
         rate_limiting: 'Без ограничений',
         contact: {
@@ -338,11 +458,12 @@ app.get('/api/docs', (req, res) => {
         }
     });
 });
+
 // ========== МАРШРУТЫ ДЛЯ ОБЩЕДОСТУПНЫХ ФАЙЛОВ ==========
 
-// Отдаем загруженные файлы
+// Отдаем загруженные файлы (для локального хранения, если FS недоступен)
 app.use('/uploads', express.static(path.join(__dirname, 'public', 'uploads')));
-app.use('/tickets', express.static(path.join(__dirname, 'public', 'tickets')));
+app.use('/temp_uploads', express.static(path.join(__dirname, 'public', 'temp_uploads')));
 
 // ========== ОБРАБОТКА ОШИБОК ==========
 
@@ -362,10 +483,10 @@ app.use((err, req, res, next) => {
     
     // Multer ошибки
     if (err.code === 'LIMIT_FILE_SIZE') {
-        return res.status(400).json({ error: 'Размер файла превышает 50MB' });
+        return res.status(400).json({ error: 'Размер файла превышает 100MB' });
     }
     if (err.code === 'LIMIT_FILE_COUNT') {
-        return res.status(400).json({ error: 'Можно загрузить не более 7 файлов' });
+        return res.status(400).json({ error: 'Можно загрузить не более 10 файлов' });
     }
     
     const statusCode = err.status || 500;
@@ -386,7 +507,6 @@ async function startServer() {
         // Создаем необходимые папки
         const folders = [
             path.join(__dirname, 'public', 'temp_uploads'),
-            path.join(__dirname, 'public', 'tickets'),
             path.join(__dirname, 'public', 'uploads'),
             path.join(__dirname, 'data')
         ];
@@ -399,47 +519,76 @@ async function startServer() {
         });
         
         // Инициализация базы данных
+        console.log('='.repeat(60));
         console.log('Инициализация базы данных...');
         await db.init();
         
+        // Проверка подключения к файловому сервису
+        console.log('\nПроверка подключения к файловому сервису...');
+        const fsStatus = await fsService.checkConnection();
+        
+        console.log('='.repeat(60));
+        console.log('НАСТРОЙКИ ФАЙЛОВОГО СЕРВИСА:');
+        console.log('='.repeat(60));
+        console.log(`URL: ${process.env.FS_BASE_URL || 'Не настроен'}`);
+        console.log(`Сервис: ${process.env.FS_SERVICE_NAME || 'itsupport'}`);
+        console.log(`Токен: ${process.env.FS_TOKEN ? '✓ Настроен' : '✗ Не настроен'}`);
+        
+        if (fsStatus.connected) {
+            console.log('Статус: ✓ ПОДКЛЮЧЕНО');
+            console.log(`Сообщение: ${fsStatus.message}`);
+            
+            if (fsStatus.stats) {
+                console.log(`Файлов в системе: ${fsStatus.stats.total_files || 0}`);
+                console.log(`Общий размер: ${formatFileSize(fsStatus.stats.total_size || 0)}`);
+            }
+        } else {
+            console.log('Статус: ✗ НЕДОСТУПЕН');
+            console.log(`Ошибка: ${fsStatus.error}`);
+            console.log('⚠ Внимание: Файлы будут сохраняться локально');
+        }
+        console.log('='.repeat(60));
+        
         // Генерация логина и пароля суперадмина
         const superadmin = auth.generateSuperadmin();
-        console.log('\n' + '='.repeat(50));
-        console.log('SUPERADMIN CREDENTIALS:');
-        console.log('='.repeat(50));
-        console.log(`Username: ${superadmin.username}`);
-        console.log(`Password: ${superadmin.password}`);
-        console.log('='.repeat(50));
-        console.log('ВАЖНО: Сохраните эти данные!');
-        console.log('='.repeat(50) + '\n');
+        console.log('\n' + '='.repeat(60));
+        console.log('УЧЕТНЫЕ ДАННЫЕ СУПЕРАДМИНА:');
+        console.log('='.repeat(60));
+        console.log(`Логин: ${superadmin.username}`);
+        console.log(`Пароль: ${superadmin.password}`);
+        console.log('='.repeat(60));
+        console.log('ВАЖНО: Сохраните эти данные в безопасном месте!');
+        console.log('='.repeat(60) + '\n');
         
         // Запуск сервера
         app.listen(PORT, () => {
-            console.log('='.repeat(50));
-            console.log(`Сервер запущен!`);
-            console.log(`URL: http://localhost:${PORT}`);
-            console.log(`Мой IP: http://${getLocalIP()}:${PORT}`);
+            console.log('='.repeat(60));
+            console.log(`СЕРВЕР ЗАПУЩЕН!`);
+            console.log('='.repeat(60));
+            console.log(`Локальный URL: http://localhost:${PORT}`);
+            console.log(`Сетевой URL: http://${getLocalIP()}:${PORT}`);
             console.log(`Рабочая директория: ${process.cwd()}`);
-            console.log(`Папка для файлов: ${path.join(__dirname, 'public', 'tickets')}`);
-            console.log('='.repeat(50));
-            console.log('\nДоступные маршруты:');
+            console.log(`Тип БД: ${db.dbType === 'postgres' ? 'PostgreSQL' : 'SQLite'}`);
+            console.log(`Файловый сервис: ${fsStatus.connected ? 'АКТИВЕН' : 'ЛОКАЛЬНЫЙ'}`);
+            console.log('='.repeat(60));
+            console.log('\nОСНОВНЫЕ МАРШРУТЫ:');
             console.log('  /                - Создание заявки');
             console.log('  /my-tickets      - Мои заявки');
-            console.log('  /admin           - Админ панель (только для администраторов)');
-            console.log('  /login.html      - Страница авторизации');
-            console.log('\nAPI маршруты:');
+            console.log('  /admin           - Админ панель');
+            console.log('  /login.html      - Авторизация');
+            console.log('\nAPI МАРШРУТЫ:');
             console.log('  POST   /api/login                     - Авторизация');
-            console.log('  POST   /api/logout                    - Выход');
-            console.log('  GET    /api/user                      - Информация о текущем пользователе');
             console.log('  POST   /api/tickets                   - Создание заявки');
             console.log('  GET    /api/tickets/my                - Мои заявки');
-            console.log('  GET    /api/tickets/:id               - Получение заявки');
-            console.log('  GET    /api/problem-types             - Типы проблем');
-            console.log('  GET    /api/cabinets                  - Список кабинетов');
+            console.log('  GET    /api/fs/status                 - Статус файлового сервиса');
             console.log('  GET    /api/admin/tickets             - Все заявки (админ)');
-            console.log('  PUT    /api/admin/tickets/:id/status  - Изменение статуса (админ)');
-            console.log('  GET    /api/admin/stats               - Статистика (админ)');
-            console.log('='.repeat(50));
+            console.log('  GET    /api/docs                      - Документация API');
+            console.log('\nCLI СКРИПТЫ:');
+            console.log('  npm run upload   <файл>              - Загрузка файла в FS');
+            console.log('  npm run download <номер-файла>       - Скачивание файла');
+            console.log('  npm run list                          - Список файлов');
+            console.log('  npm run stats                         - Статистика FS');
+            console.log('='.repeat(60));
         });
         
     } catch (error) {
@@ -459,6 +608,15 @@ function getLocalIP() {
         }
     }
     return 'localhost';
+}
+
+// Функция для форматирования размера файла
+function formatFileSize(bytes) {
+    if (!bytes || bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
 // Функция для очистки старых временных файлов
@@ -492,6 +650,24 @@ function cleanupOldFiles() {
 
 // Запускаем очистку каждые 6 часов
 setInterval(cleanupOldFiles, 6 * 60 * 60 * 1000);
+
+// Функция для проверки доступности FS при запуске
+async function checkFSOnStartup() {
+    try {
+        const status = await fsService.checkConnection();
+        if (status.connected) {
+            console.log('[FS] Сервис доступен');
+        } else {
+            console.warn('[FS] Сервис недоступен, используем локальное хранение');
+        }
+    } catch (error) {
+        console.error('[FS] Ошибка проверки:', error.message);
+    }
+}
+
+// Проверяем FS при запуске и каждые 30 минут
+setTimeout(checkFSOnStartup, 5000);
+setInterval(checkFSOnStartup, 30 * 60 * 1000);
 
 // Запускаем сервер
 startServer();

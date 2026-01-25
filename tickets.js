@@ -2,16 +2,16 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const db = require('./db');
+const fsService = require('./fs-service');
 
 // ========== КОНФИГУРАЦИЯ ПУТЕЙ ==========
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
-const TICKETS_DIR = path.join(PUBLIC_DIR, 'tickets');
 const TEMP_DIR = path.join(PUBLIC_DIR, 'temp_uploads');
 
 // Создание необходимых директорий
 function initUploadDirs() {
-    [TICKETS_DIR, TEMP_DIR].forEach(dir => {
+    [TEMP_DIR].forEach(dir => {
         if (!fs.existsSync(dir)) {
             fs.mkdirSync(dir, { recursive: true });
             console.log(`Создана папка: ${dir}`);
@@ -22,83 +22,10 @@ function initUploadDirs() {
 // Инициализация при загрузке модуля
 initUploadDirs();
 
-// ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
-
-// Получение пути к папке заявки
-function getTicketUploadPath(ticketId, date = null) {
-    const uploadDate = date ? new Date(date) : new Date();
-    const dateFolder = uploadDate.toISOString().split('T')[0]; // ГГГГ-ММ-ДД
-    const ticketPath = path.join(TICKETS_DIR, dateFolder, ticketId.toString());
-    
-    // Создаем структуру папок
-    if (!fs.existsSync(ticketPath)) {
-        fs.mkdirSync(ticketPath, { recursive: true });
-    }
-    
-    return ticketPath;
-}
-
-// Получение относительного пути файла
-function getRelativeFilePath(ticketId, filename, date = null) {
-    const uploadDate = date ? new Date(date) : new Date();
-    const dateFolder = uploadDate.toISOString().split('T')[0];
-    return `/tickets/${dateFolder}/${ticketId}/${filename}`;
-}
-
-// Очистка временных файлов
-function cleanupTempFiles(fileInfos) {
-    if (!fileInfos) return;
-    
-    fileInfos.forEach(fileInfo => {
-        const filePath = path.join(TEMP_DIR, fileInfo.filename);
-        if (fs.existsSync(filePath)) {
-            try {
-                fs.unlinkSync(filePath);
-            } catch (error) {
-                console.error(`Ошибка удаления файла ${fileInfo.filename}:`, error);
-            }
-        }
-    });
-}
-
-// Периодическая очистка старых временных файлов
-function cleanupOldTempFiles() {
-    try {
-        if (!fs.existsSync(TEMP_DIR)) return;
-        
-        const files = fs.readdirSync(TEMP_DIR);
-        const now = Date.now();
-        const oneHour = 60 * 60 * 1000;
-        
-        files.forEach(file => {
-            const filePath = path.join(TEMP_DIR, file);
-            try {
-                const stats = fs.statSync(filePath);
-                if (now - stats.mtimeMs > oneHour) {
-                    fs.unlinkSync(filePath);
-                }
-            } catch (error) {
-                console.error(`Ошибка при удалении ${file}:`, error);
-            }
-        });
-        
-        // Удаляем пустую папку
-        if (fs.existsSync(TEMP_DIR) && fs.readdirSync(TEMP_DIR).length === 0) {
-            fs.rmdirSync(TEMP_DIR);
-        }
-    } catch (error) {
-        console.error('Ошибка при очистке временных файлов:', error);
-    }
-}
-
-// Запускаем очистку каждые 30 минут
-setInterval(cleanupOldTempFiles, 30 * 60 * 1000);
-
 // ========== НАСТРОЙКА MULTER ДЛЯ ЗАГРУЗКИ ФАЙЛОВ ==========
 
 const storage = multer.diskStorage({
     destination: function (req, file, cb) {
-        // Используем временную папку
         if (!fs.existsSync(TEMP_DIR)) {
             fs.mkdirSync(TEMP_DIR, { recursive: true });
         }
@@ -108,7 +35,6 @@ const storage = multer.diskStorage({
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
         const ext = path.extname(file.originalname);
         
-        // Создаем безопасное имя файла
         const safeName = path.basename(file.originalname, ext)
             .replace(/[^a-z0-9]/gi, '_')
             .toLowerCase()
@@ -116,13 +42,13 @@ const storage = multer.diskStorage({
             
         const filename = `${safeName}_${uniqueSuffix}${ext}`;
         
-        // Сохраняем информацию о файле в запросе
         if (!req.uploadedFiles) req.uploadedFiles = [];
         req.uploadedFiles.push({
             originalname: file.originalname,
             filename: filename,
             size: file.size,
-            mimetype: file.mimetype
+            mimetype: file.mimetype,
+            path: path.join(TEMP_DIR, filename)
         });
         
         cb(null, filename);
@@ -130,42 +56,98 @@ const storage = multer.diskStorage({
 });
 
 const fileFilter = (req, file, cb) => {
-    const allowedTypes = /jpeg|jpg|png|gif|bmp|pdf|doc|docx|xls|xlsx|txt/;
+    const allowedTypes = /jpeg|jpg|png|gif|bmp|pdf|doc|docx|xls|xlsx|txt|zip|rar|7z/;
     const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
     const mimetype = allowedTypes.test(file.mimetype);
     
     if (mimetype && extname) {
         cb(null, true);
     } else {
-        cb(new Error('Недопустимый тип файла. Разрешены: изображения, PDF, документы'));
+        cb(new Error('Недопустимый тип файла'));
     }
 };
 
 const upload = multer({
     storage: storage,
     limits: {
-        fileSize: 50 * 1024 * 1024, // 50MB
-        files: 7 // Максимум 7 файлов
+        fileSize: 100 * 1024 * 1024, // 100MB
+        files: 10 // Максимум 10 файлов
     },
     fileFilter: fileFilter
 });
 
+// ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
+
+// Очистка временных файлов
+function cleanupTempFiles(fileInfos) {
+    if (!fileInfos) return;
+    
+    fileInfos.forEach(fileInfo => {
+        if (fileInfo.path && fs.existsSync(fileInfo.path)) {
+            try {
+                fs.unlinkSync(fileInfo.path);
+            } catch (error) {
+                console.error(`Ошибка удаления файла ${fileInfo.filename}:`, error);
+            }
+        }
+    });
+}
+
+// Форматирование информации о файле для БД
+function formatFileInfoForDB(fsFiles) {
+    return fsFiles
+        .filter(file => file.success)
+        .map(file => ({
+            fileNumber: file.fileNumber,
+            fileName: file.fileName,
+            originalName: file.originalName,
+            size: file.size,
+            uploadedAt: file.uploadedAt,
+            url: file.url,
+            downloadUrl: file.downloadUrl
+        }));
+}
+
+// Получение файлов для заявки
+async function getFilesForTicket(ticketId, userId) {
+    try {
+        const ticket = await db.getTicketById(ticketId, userId);
+        if (!ticket || !ticket.files) return [];
+        
+        let files = [];
+        if (typeof ticket.files === 'string') {
+            try {
+                files = JSON.parse(ticket.files);
+            } catch (e) {
+                files = [];
+            }
+        } else {
+            files = ticket.files;
+        }
+        
+        return files;
+    } catch (error) {
+        console.error('Ошибка получения файлов:', error);
+        return [];
+    }
+}
+
 // ========== ОСНОВНЫЕ ФУНКЦИИ ==========
 
-// Создание заявки
+// Создание заявки с загрузкой файлов в FS
 async function createTicket(req, res) {
     try {
-        upload.array('files', 7)(req, res, async (err) => {
+        upload.array('files', 10)(req, res, async (err) => {
             if (err instanceof multer.MulterError) {
                 cleanupTempFiles(req.uploadedFiles);
                 
                 if (err.code === 'LIMIT_FILE_SIZE') {
                     return res.status(400).json({ 
-                        error: 'Размер файла превышает 50MB' 
+                        error: 'Размер файла превышает 100MB' 
                     });
                 } else if (err.code === 'LIMIT_FILE_COUNT') {
                     return res.status(400).json({ 
-                        error: 'Можно загрузить не более 7 файлов' 
+                        error: 'Можно загрузить не более 10 файлов' 
                     });
                 } else {
                     return res.status(400).json({ 
@@ -188,7 +170,7 @@ async function createTicket(req, res) {
                 comments 
             } = req.body;
             
-            // Валидация обязательных полей
+            // Валидация
             const errors = [];
             if (!problem_type_id) errors.push('Тип проблемы');
             if (!cabinet) errors.push('Номер кабинета');
@@ -217,20 +199,23 @@ async function createTicket(req, res) {
                 const ticketId = await db.createTicket(ticketData);
                 console.log(`Создана заявка #${ticketId} пользователем ${req.session.user.login}`);
                 
-                // Получаем дату создания заявки
-                const ticket = await db.getTicketById(ticketId);
-                const createdDate = ticket.created_at;
+                let uploadedFiles = [];
                 
-                // Обработка файлов
-                let movedFiles = [];
+                // Загружаем файлы в FS
                 if (req.uploadedFiles && req.uploadedFiles.length > 0) {
-                    movedFiles = await moveFilesToTicketFolder(ticketId, req.uploadedFiles, createdDate);
+                    const uploadResults = await fsService.uploadFiles(
+                        req.uploadedFiles,
+                        req.session.user.id,
+                        ticketId
+                    );
                     
-                    // Обновляем пути к файлам в БД
-                    const filePaths = movedFiles.map(f => f.path);
-                    await db.updateTicketFiles(ticketId, filePaths);
+                    // Формируем информацию о файлах для БД
+                    uploadedFiles = formatFileInfoForDB(uploadResults);
                     
-                    console.log(`Загружено ${movedFiles.length} файлов для заявки #${ticketId}`);
+                    // Обновляем заявку в БД с информацией о файлах
+                    await db.updateTicketFiles(ticketId, uploadedFiles);
+                    
+                    console.log(`Загружено ${uploadedFiles.length} файлов в FS для заявки #${ticketId}`);
                 }
                 
                 // Обновляем контакты пользователя
@@ -239,16 +224,18 @@ async function createTicket(req, res) {
                         phone: phone || '', 
                         email: email || '' 
                     });
-                    
-                    // Обновляем данные в сессии
                     req.session.user.contacts = { phone, email };
                 }
+                
+                // Очищаем временные файлы
+                cleanupTempFiles(req.uploadedFiles);
                 
                 res.json({ 
                     success: true, 
                     ticketId, 
                     message: 'Заявка успешно создана',
-                    files: movedFiles.length
+                    files: uploadedFiles.length,
+                    uploadedFiles: uploadedFiles
                 });
                 
             } catch (dbError) {
@@ -262,45 +249,11 @@ async function createTicket(req, res) {
         });
     } catch (error) {
         console.error('Create ticket error:', error);
+        cleanupTempFiles(req.uploadedFiles);
         res.status(500).json({ 
             error: 'Внутренняя ошибка сервера' 
         });
     }
-}
-
-// Перемещение файлов в папку заявки
-async function moveFilesToTicketFolder(ticketId, tempFiles, createdDate) {
-    const ticketPath = getTicketUploadPath(ticketId, createdDate);
-    const movedFiles = [];
-    
-    for (const fileInfo of tempFiles) {
-        const oldPath = path.join(TEMP_DIR, fileInfo.filename);
-        const newPath = path.join(ticketPath, fileInfo.filename);
-        
-        try {
-            if (!fs.existsSync(oldPath)) {
-                console.error(`Файл не найден: ${oldPath}`);
-                continue;
-            }
-            
-            // Перемещаем файл
-            fs.renameSync(oldPath, newPath);
-            
-            // Сохраняем информацию о файле
-            const relativePath = getRelativeFilePath(ticketId, fileInfo.filename, createdDate);
-            movedFiles.push({
-                name: fileInfo.originalname,
-                path: relativePath,
-                size: fileInfo.size,
-                filename: fileInfo.filename
-            });
-            
-        } catch (error) {
-            console.error(`Ошибка при перемещении файла ${fileInfo.filename}:`, error);
-        }
-    }
-    
-    return movedFiles;
 }
 
 // Получение заявок пользователя
@@ -308,22 +261,9 @@ async function getMyTickets(req, res) {
     try {
         const tickets = await db.getUserTickets(req.session.user.id);
         
-        // Обработка файлов
-        const processedTickets = tickets.map(ticket => {
-            let files = [];
-            if (ticket.files) {
-                if (typeof ticket.files === 'string') {
-                    try {
-                        files = JSON.parse(ticket.files);
-                    } catch (e) {
-                        files = [];
-                    }
-                } else {
-                    files = ticket.files;
-                }
-            }
+        const processedTickets = await Promise.all(tickets.map(async (ticket) => {
+            const files = await getFilesForTicket(ticket.id, req.session.user.id);
             
-            // Форматирование дат
             const createdDate = new Date(ticket.created_at);
             const formattedDate = createdDate.toLocaleDateString('ru-RU', {
                 day: '2-digit',
@@ -336,10 +276,11 @@ async function getMyTickets(req, res) {
             return {
                 ...ticket,
                 files,
+                fileCount: files.length,
                 created_at_formatted: formattedDate,
                 status_text: getStatusText(ticket.status)
             };
-        });
+        }));
         
         res.json(processedTickets);
     } catch (error) {
@@ -360,7 +301,6 @@ async function getTicketById(req, res) {
             return res.status(404).json({ error: 'Заявка не найдена' });
         }
         
-        // Проверка прав доступа
         const isOwner = ticket.user_id === req.session.user.id;
         const isAdmin = req.session.user.role === 'admin';
         
@@ -368,21 +308,8 @@ async function getTicketById(req, res) {
             return res.status(403).json({ error: 'Нет доступа к этой заявке' });
         }
         
-        // Обработка файлов
-        let files = [];
-        if (ticket.files) {
-            if (typeof ticket.files === 'string') {
-                try {
-                    files = JSON.parse(ticket.files);
-                } catch (e) {
-                    files = [];
-                }
-            } else {
-                files = ticket.files;
-            }
-        }
+        const files = await getFilesForTicket(ticketId, req.session.user.id);
         
-        // Форматирование дат
         const formatDateTime = (dateString) => {
             if (!dateString) return null;
             const date = new Date(dateString);
@@ -398,6 +325,7 @@ async function getTicketById(req, res) {
         const processedTicket = {
             ...ticket,
             files,
+            fileCount: files.length,
             created_at_formatted: formatDateTime(ticket.created_at),
             assigned_at_formatted: formatDateTime(ticket.assigned_at),
             in_progress_at_formatted: formatDateTime(ticket.in_progress_at),
@@ -415,52 +343,12 @@ async function getTicketById(req, res) {
     }
 }
 
-// Обновление заявки
-async function updateTicket(req, res) {
-    try {
-        const ticketId = req.params.id;
-        const { description, comments } = req.body;
-        
-        // Получаем текущую заявку
-        const ticket = await db.getTicketById(ticketId, req.session.user.id);
-        
-        if (!ticket) {
-            return res.status(404).json({ error: 'Заявка не найдена' });
-        }
-        
-        // Проверка прав на редактирование
-        const canEdit = ticket.user_id === req.session.user.id && 
-                       ['открыта', 'требует уточнения'].includes(ticket.status);
-        
-        if (!canEdit) {
-            return res.status(403).json({ 
-                error: 'Заявку нельзя редактировать в текущем статусе' 
-            });
-        }
-        
-        // Обновляем заявку
-        await db.updateTicketInfo(ticketId, { description, comments });
-        
-        res.json({ 
-            success: true, 
-            message: 'Заявка обновлена',
-            ticketId 
-        });
-        
-    } catch (error) {
-        console.error('Update ticket error:', error);
-        res.status(500).json({ 
-            error: 'Ошибка при обновлении заявки' 
-        });
-    }
-}
-
-// Добавление файлов к заявке
+// Добавление файлов к существующей заявке
 async function addFilesToTicket(req, res) {
     try {
         const ticketId = req.params.id;
         
-        upload.array('files', 7)(req, res, async (err) => {
+        upload.array('files', 10)(req, res, async (err) => {
             if (err) {
                 cleanupTempFiles(req.uploadedFiles);
                 return res.status(400).json({ 
@@ -469,7 +357,6 @@ async function addFilesToTicket(req, res) {
             }
             
             try {
-                // Получаем текущую заявку
                 const ticket = await db.getTicketById(ticketId, req.session.user.id);
                 
                 if (!ticket) {
@@ -477,7 +364,6 @@ async function addFilesToTicket(req, res) {
                     return res.status(404).json({ error: 'Заявка не найдена' });
                 }
                 
-                // Проверка прав
                 const isOwner = ticket.user_id === req.session.user.id;
                 const isAdmin = req.session.user.role === 'admin';
                 
@@ -486,46 +372,37 @@ async function addFilesToTicket(req, res) {
                     return res.status(403).json({ error: 'Нет доступа к этой заявке' });
                 }
                 
-                // Получаем существующие файлы
-                let existingFiles = [];
-                if (ticket.files) {
-                    if (typeof ticket.files === 'string') {
-                        try {
-                            existingFiles = JSON.parse(ticket.files);
-                        } catch (e) {
-                            existingFiles = [];
-                        }
-                    } else {
-                        existingFiles = ticket.files;
-                    }
-                }
+                const existingFiles = await getFilesForTicket(ticketId, req.session.user.id);
                 
-                // Проверяем лимит файлов
-                if (existingFiles.length + (req.uploadedFiles?.length || 0) > 7) {
+                if (existingFiles.length + (req.uploadedFiles?.length || 0) > 10) {
                     cleanupTempFiles(req.uploadedFiles);
                     return res.status(400).json({ 
-                        error: `Максимум 7 файлов. Уже загружено: ${existingFiles.length}` 
+                        error: `Максимум 10 файлов. Уже загружено: ${existingFiles.length}` 
                     });
                 }
                 
-                // Перемещаем файлы
                 let newFiles = [];
                 if (req.uploadedFiles && req.uploadedFiles.length > 0) {
-                    newFiles = await moveFilesToTicketFolder(ticketId, req.uploadedFiles, ticket.created_at);
+                    const uploadResults = await fsService.uploadFiles(
+                        req.uploadedFiles,
+                        req.session.user.id,
+                        ticketId
+                    );
                     
-                    // Объединяем файлы
-                    const newFilePaths = newFiles.map(f => f.path);
-                    const allFiles = [...existingFiles, ...newFilePaths];
+                    newFiles = formatFileInfoForDB(uploadResults);
+                    const allFiles = [...existingFiles, ...newFiles];
                     
-                    // Обновляем БД
                     await db.updateTicketFiles(ticketId, allFiles);
                 }
+                
+                cleanupTempFiles(req.uploadedFiles);
                 
                 res.json({ 
                     success: true, 
                     message: 'Файлы успешно добавлены',
                     added: newFiles.length,
-                    totalFiles: existingFiles.length + newFiles.length
+                    totalFiles: existingFiles.length + newFiles.length,
+                    newFiles: newFiles
                 });
                 
             } catch (error) {
@@ -539,6 +416,7 @@ async function addFilesToTicket(req, res) {
         
     } catch (error) {
         console.error('Add files to ticket error:', error);
+        cleanupTempFiles(req.uploadedFiles);
         res.status(500).json({ 
             error: 'Внутренняя ошибка сервера' 
         });
@@ -548,16 +426,14 @@ async function addFilesToTicket(req, res) {
 // Удаление файла из заявки
 async function deleteTicketFile(req, res) {
     try {
-        const { ticketId, filename } = req.params;
+        const { ticketId, fileNumber } = req.params;
         
-        // Получаем заявку
         const ticket = await db.getTicketById(ticketId, req.session.user.id);
         
         if (!ticket) {
             return res.status(404).json({ error: 'Заявка не найдена' });
         }
         
-        // Проверка прав
         const isOwner = ticket.user_id === req.session.user.id;
         const isAdmin = req.session.user.role === 'admin';
         
@@ -565,44 +441,31 @@ async function deleteTicketFile(req, res) {
             return res.status(403).json({ error: 'Нет доступа к этой заявке' });
         }
         
-        // Получаем текущие файлы
-        let files = [];
-        if (ticket.files) {
-            if (typeof ticket.files === 'string') {
-                try {
-                    files = JSON.parse(ticket.files);
-                } catch (e) {
-                    files = [];
-                }
-            } else {
-                files = ticket.files;
-            }
-        }
+        const existingFiles = await getFilesForTicket(ticketId, req.session.user.id);
+        const fileIndex = existingFiles.findIndex(f => f.fileNumber === fileNumber);
         
-        // Находим и удаляем файл
-        const fileIndex = files.findIndex(f => f.includes(filename));
         if (fileIndex === -1) {
-            return res.status(404).json({ error: 'Файл не найден' });
+            return res.status(404).json({ error: 'Файл не найден в заявке' });
         }
         
-        // Удаляем физический файл
-        const filePath = files[fileIndex];
-        const fullPath = path.join(PUBLIC_DIR, filePath.substring(1)); // Убираем первый /
-        
-        if (fs.existsSync(fullPath)) {
-            fs.unlinkSync(fullPath);
+        // Удаляем файл из FS
+        const deleteResult = await fsService.deleteFile(fileNumber);
+        if (!deleteResult.success) {
+            return res.status(500).json({ 
+                error: 'Не удалось удалить файл из хранилища',
+                details: deleteResult.error
+            });
         }
         
-        // Удаляем из списка
-        files.splice(fileIndex, 1);
-        
-        // Обновляем БД
-        await db.updateTicketFiles(ticketId, files);
+        // Удаляем файл из списка в БД
+        existingFiles.splice(fileIndex, 1);
+        await db.updateTicketFiles(ticketId, existingFiles);
         
         res.json({ 
             success: true, 
             message: 'Файл удален',
-            remainingFiles: files.length
+            fileNumber: fileNumber,
+            remainingFiles: existingFiles.length
         });
         
     } catch (error) {
@@ -613,70 +476,37 @@ async function deleteTicketFile(req, res) {
     }
 }
 
-// ========== СПРАВОЧНИКИ ==========
-
-// Получение типов проблем
-async function getProblemTypes(req, res) {
+// Обновление заявки
+async function updateTicket(req, res) {
     try {
-        const types = await db.getProblemTypes();
-        res.json(types);
-    } catch (error) {
-        console.error('Get problem types error:', error);
-        res.status(500).json({ 
-            error: 'Ошибка при получении типов проблем' 
-        });
-    }
-}
-
-// Получение списка кабинетов
-async function getCabinets(req, res) {
-    try {
-        const cabinets = await db.getCabinets();
-        res.json(cabinets);
-    } catch (error) {
-        console.error('Get cabinets error:', error);
-        res.status(500).json({ 
-            error: 'Ошибка при получении списка кабинетов' 
-        });
-    }
-}
-
-// Добавление нового кабинета
-async function addCabinet(req, res) {
-    try {
-        const { number } = req.body;
+        const ticketId = req.params.id;
+        const { description, comments } = req.body;
         
-        if (!number || number.trim() === '') {
-            return res.status(400).json({ error: 'Номер кабинета обязателен' });
+        const ticket = await db.getTicketById(ticketId, req.session.user.id);
+        if (!ticket) {
+            return res.status(404).json({ error: 'Заявка не найдена' });
         }
         
-        const cleanNumber = number.trim();
-        await db.addCabinet(cleanNumber, req.session.user.id);
+        const canEdit = ticket.user_id === req.session.user.id && 
+                       ['открыта', 'требует уточнения'].includes(ticket.status);
+        
+        if (!canEdit) {
+            return res.status(403).json({ 
+                error: 'Заявку нельзя редактировать в текущем статусе' 
+            });
+        }
+        
+        await db.updateTicketInfo(ticketId, { description, comments });
         
         res.json({ 
             success: true, 
-            message: 'Кабинет добавлен',
-            cabinet: { number: cleanNumber }
+            message: 'Заявка обновлена',
+            ticketId 
         });
         
     } catch (error) {
-        console.error('Add cabinet error:', error);
-        res.status(500).json({ 
-            error: 'Ошибка при добавлении кабинета' 
-        });
-    }
-}
-
-// Получение контактов пользователя
-async function getUserContacts(req, res) {
-    try {
-        const contacts = await db.getUserContacts(req.session.user.id);
-        res.json(contacts || { phone: '', email: '' });
-    } catch (error) {
-        console.error('Get user contacts error:', error);
-        res.status(500).json({ 
-            error: 'Ошибка при получении контактов' 
-        });
+        console.error('Update ticket error:', error);
+        res.status(500).json({ error: 'Ошибка при обновлении заявки' });
     }
 }
 
@@ -687,20 +517,8 @@ async function getAllTickets(req, res) {
     try {
         const tickets = await db.getAllTickets();
         
-        // Обработка и форматирование
-        const processedTickets = tickets.map(ticket => {
-            let files = [];
-            if (ticket.files) {
-                if (typeof ticket.files === 'string') {
-                    try {
-                        files = JSON.parse(ticket.files);
-                    } catch (e) {
-                        files = [];
-                    }
-                } else {
-                    files = ticket.files;
-                }
-            }
+        const processedTickets = await Promise.all(tickets.map(async (ticket) => {
+            const files = await getFilesForTicket(ticket.id, ticket.user_id);
             
             const createdDate = new Date(ticket.created_at);
             const formattedDate = createdDate.toLocaleDateString('ru-RU', {
@@ -714,11 +532,12 @@ async function getAllTickets(req, res) {
             return {
                 ...ticket,
                 files,
+                fileCount: files.length,
                 created_at_formatted: formattedDate,
                 user_info: ticket.user_full_name || `Пользователь #${ticket.user_id}`,
                 status_text: getStatusText(ticket.status)
             };
-        });
+        }));
         
         res.json(processedTickets);
     } catch (error) {
@@ -746,16 +565,13 @@ async function updateTicketStatus(req, res) {
             });
         }
         
-        // Получаем текущую заявку
         const ticket = await db.getTicketById(ticketId);
         if (!ticket) {
             return res.status(404).json({ error: 'Заявка не найдена' });
         }
         
-        // Обновляем статус
         await db.updateTicketStatus(ticketId, status);
         
-        // Добавляем комментарий
         if (comment && comment.trim() !== '') {
             const currentComments = ticket.comments || '';
             const adminComment = `\n[Админ ${req.session.user.full_name}]: ${comment.trim()} (${new Date().toLocaleString()})`;
@@ -774,9 +590,7 @@ async function updateTicketStatus(req, res) {
         
     } catch (error) {
         console.error('Update ticket status error:', error);
-        res.status(500).json({ 
-            error: 'Ошибка при обновлении статуса' 
-        });
+        res.status(500).json({ error: 'Ошибка при обновлении статуса' });
     }
 }
 
@@ -790,13 +604,11 @@ async function assignTicket(req, res) {
             return res.status(400).json({ error: 'Главный исполнитель обязателен' });
         }
         
-        // Получаем текущую заявку
         const ticket = await db.getTicketById(ticketId);
         if (!ticket) {
             return res.status(404).json({ error: 'Заявка не найдена' });
         }
         
-        // Обновляем исполнителей
         const updates = {
             main_executor: main_executor.trim(),
             executor: executor ? executor.trim() : null,
@@ -805,12 +617,10 @@ async function assignTicket(req, res) {
         
         await db.updateTicketInfo(ticketId, updates);
         
-        // Меняем статус при необходимости
         if (ticket.status === 'открыта') {
             await db.updateTicketStatus(ticketId, 'назначена');
         }
         
-        // Добавляем комментарий
         if (comment && comment.trim() !== '') {
             const currentComments = ticket.comments || '';
             const assignComment = `\n[Назначение от ${req.session.user.full_name}]: ${comment.trim()} (${new Date().toLocaleString()})`;
@@ -830,9 +640,55 @@ async function assignTicket(req, res) {
         
     } catch (error) {
         console.error('Assign ticket error:', error);
-        res.status(500).json({ 
-            error: 'Ошибка при назначении исполнителя' 
+        res.status(500).json({ error: 'Ошибка при назначении исполнителя' });
+    }
+}
+
+// ========== СПРАВОЧНИКИ ==========
+
+// Получение типов проблем
+async function getProblemTypes(req, res) {
+    try {
+        const types = await db.getProblemTypes();
+        res.json(types);
+    } catch (error) {
+        console.error('Get problem types error:', error);
+        res.status(500).json({ error: 'Ошибка при получении типов проблем' });
+    }
+}
+
+// Получение списка кабинетов
+async function getCabinets(req, res) {
+    try {
+        const cabinets = await db.getCabinets();
+        res.json(cabinets);
+    } catch (error) {
+        console.error('Get cabinets error:', error);
+        res.status(500).json({ error: 'Ошибка при получении списка кабинетов' });
+    }
+}
+
+// Добавление нового кабинета
+async function addCabinet(req, res) {
+    try {
+        const { number } = req.body;
+        
+        if (!number || number.trim() === '') {
+            return res.status(400).json({ error: 'Номер кабинета обязателен' });
+        }
+        
+        const cleanNumber = number.trim();
+        await db.addCabinet(cleanNumber, req.session.user.id);
+        
+        res.json({ 
+            success: true, 
+            message: 'Кабинет добавлен',
+            cabinet: { number: cleanNumber }
         });
+        
+    } catch (error) {
+        console.error('Add cabinet error:', error);
+        res.status(500).json({ error: 'Ошибка при добавлении кабинета' });
     }
 }
 
@@ -854,8 +710,20 @@ function getStatusText(status) {
     return statusMap[status] || status;
 }
 
+// Функция для получения информации о файловом сервисе
+async function getFileServiceStatus(req, res) {
+    try {
+        const status = await fsService.checkConnection();
+        res.json(status);
+    } catch (error) {
+        res.status(500).json({ 
+            connected: false, 
+            error: error.message 
+        });
+    }
+}
+
 module.exports = {
-    // Основные функции
     createTicket,
     getMyTickets,
     getTicketById,
@@ -867,10 +735,12 @@ module.exports = {
     getProblemTypes,
     getCabinets,
     addCabinet,
-    getUserContacts,
     
     // Административные функции
     getAllTickets,
     updateTicketStatus,
-    assignTicket
+    assignTicket,
+    
+    // Функция для получения информации о файловом сервисе
+    getFileServiceStatus
 };

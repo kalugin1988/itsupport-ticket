@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Страница не найдена | IT Support</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            padding: 20px;
+        }
+        
+        .container {
+            text-align: center;
+            max-width: 600px;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
+        }
+        
+        h1 {
+            font-size: 120px;
+            margin-bottom: 20px;
+            font-weight: 800;
+            color: white;
+            text-shadow: 3px 3px 0 rgba(0, 0, 0, 0.2);
+        }
+        
+        h2 {
+            font-size: 32px;
+            margin-bottom: 20px;
+            font-weight: 600;
+        }
+        
+        p {
+            font-size: 18px;
+            line-height: 1.6;
+            margin-bottom: 30px;
+            opacity: 0.9;
+        }
+        
+        .error-code {
+            background: rgba(255, 255, 255, 0.2);
+            padding: 10px 20px;
+            border-radius: 50px;
+            display: inline-block;
+            margin-bottom: 30px;
+            font-family: monospace;
+            font-size: 16px;
+        }
+        
+        .actions {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin-top: 30px;
+        }
+        
+        .btn {
+            padding: 15px 30px;
+            background: white;
+            color: #667eea;
+            text-decoration: none;
+            border-radius: 50px;
+            font-weight: 600;
+            font-size: 16px;
+            transition: all 0.3s ease;
+            border: 2px solid white;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .btn:hover {
+            background: transparent;
+            color: white;
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
+        }
+        
+        .btn-secondary {
+            background: transparent;
+            color: white;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+        }
+        
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.1);
+            border-color: white;
+        }
+        
+        .icon {
+            font-size: 20px;
+        }
+        
+        .logo {
+            margin-bottom: 30px;
+            font-size: 24px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+        
+        .logo img {
+            height: 40px;
+            filter: brightness(0) invert(1);
+        }
+        
+        @media (max-width: 600px) {
+            .container {
+                padding: 30px 20px;
+            }
+            
+            h1 {
+                font-size: 80px;
+            }
+            
+            h2 {
+                font-size: 24px;
+            }
+            
+            .actions {
+                flex-direction: column;
+            }
+            
+            .btn {
+                width: 100%;
+                justify-content: center;
+            }
+        }
+        
+        .search-box {
+            margin: 30px 0;
+        }
+        
+        .search-input {
+            width: 100%;
+            padding: 15px 20px;
+            border: none;
+            border-radius: 50px;
+            font-size: 16px;
+            background: rgba(255, 255, 255, 0.9);
+            color: #333;
+            outline: none;
+        }
+        
+        .search-input::placeholder {
+            color: #999;
+        }
+        
+        .search-btn {
+            position: absolute;
+            right: 5px;
+            top: 5px;
+            background: #667eea;
+            border: none;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 50px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        
+        .search-wrapper {
+            position: relative;
+        }
+        
+        /* Анимация */
+        @keyframes float {
+            0%, 100% {
+                transform: translateY(0);
+            }
+            50% {
+                transform: translateY(-10px);
+            }
+        }
+        
+        .floating {
+            animation: float 3s ease-in-out infinite;
+            font-size: 80px;
+            margin-bottom: 20px;
+        }
+    </style>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <div class="logo">
+            <i class="fas fa-laptop-medical"></i>
+            <span>IT Support Service</span>
+        </div>
+        
+        <div class="floating">
+            <i class="fas fa-exclamation-triangle"></i>
+        </div>
+        
+        <h1>404</h1>
+        
+        <h2>Страница не найдена</h2>
+        
+        <p>
+            Извините, запрашиваемая страница не существует или была перемещена. 
+            Возможно, вы ввели неправильный адрес или страница была удалена.
+        </p>
+        
+        <div class="error-code">
+            Ошибка: Страница <span id="page-url"></span> не найдена
+        </div>
+        
+        <div class="search-box">
+            <div class="search-wrapper">
+                <input type="text" class="search-input" placeholder="Поиск по сайту...">
+                <button class="search-btn">
+                    <i class="fas fa-search"></i>
+                </button>
+            </div>
+        </div>
+        
+        <div class="actions">
+            <a href="/" class="btn">
+                <i class="fas fa-home icon"></i>
+                На главную
+            </a>
+            
+            <a href="/my-tickets" class="btn btn-secondary">
+                <i class="fas fa-ticket-alt icon"></i>
+                Мои заявки
+            </a>
+            
+            <a href="javascript:history.back()" class="btn btn-secondary">
+                <i class="fas fa-arrow-left icon"></i>
+                Назад
+            </a>
+            
+            <a href="/login.html" class="btn btn-secondary">
+                <i class="fas fa-sign-in-alt icon"></i>
+                Войти
+            </a>
+        </div>
+        
+        <div style="margin-top: 30px; font-size: 14px; opacity: 0.7;">
+            <p>
+                <i class="fas fa-info-circle"></i>
+                Если вы уверены, что страница должна существовать, 
+                свяжитесь с технической поддержкой.
+            </p>
+        </div>
+    </div>
+
+    <script>
+        // Показываем URL страницы
+        document.getElementById('page-url').textContent = window.location.pathname;
+        
+        // Поиск
+        document.querySelector('.search-btn').addEventListener('click', function() {
+            const query = document.querySelector('.search-input').value;
+            if (query.trim()) {
+                window.location.href = `/api/admin/search?q=${encodeURIComponent(query)}`;
+            }
+        });
+        
+        document.querySelector('.search-input').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                const query = this.value;
+                if (query.trim()) {
+                    window.location.href = `/api/admin/search?q=${encodeURIComponent(query)}`;
+                }
+            }
+        });
+        
+        // Автоматический фокус на поле поиска
+        document.querySelector('.search-input').focus();
+        
+        // Показываем текущее время
+        const timeElement = document.createElement('div');
+        timeElement.style.cssText = 'margin-top: 20px; font-size: 14px; opacity: 0.7;';
+        timeElement.innerHTML = `<i class="far fa-clock"></i> ${new Date().toLocaleString('ru-RU')}`;
+        document.querySelector('.container').appendChild(timeElement);
+    </script>
+</body>
+</html>
