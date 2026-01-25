@@ -722,6 +722,53 @@ async function getFileServiceStatus(req, res) {
         });
     }
 }
+// Получение информации о файле
+async function getFileInfo(req, res) {
+    try {
+        const { ticketId, fileNumber } = req.params;
+        
+        const ticket = await db.getTicketById(ticketId, req.session.user.id);
+        if (!ticket) {
+            return res.status(404).json({ error: 'Заявка не найдена' });
+        }
+        
+        const isOwner = ticket.user_id === req.session.user.id;
+        const isAdmin = req.session.user.role === 'admin';
+        
+        if (!isOwner && !isAdmin) {
+            return res.status(403).json({ error: 'Нет доступа к этой заявке' });
+        }
+        
+        // Получаем файлы заявки
+        const files = await getFilesForTicket(ticketId, req.session.user.id);
+        
+        // Ищем файл в списке
+        const file = files.find(f => f.fileNumber === fileNumber);
+        if (!file) {
+            return res.status(404).json({ error: 'Файл не найден в заявке' });
+        }
+        
+        // Получаем информацию из FS
+        const fsInfo = await fsService.getFileInfo(fileNumber);
+        
+        res.json({
+            success: true,
+            file: {
+                ...file,
+                fsInfo: fsInfo.success ? fsInfo : null
+            },
+            urls: {
+                download: `/api/tickets/${ticketId}/files/${fileNumber}/download`,
+                direct: fsService.getDownloadUrl(fileNumber),
+                info: `/api/tickets/${ticketId}/files/${fileNumber}/info`
+            }
+        });
+        
+    } catch (error) {
+        console.error('Get file info error:', error);
+        res.status(500).json({ error: 'Ошибка при получении информации о файле' });
+    }
+}
 
 module.exports = {
     createTicket,
@@ -730,7 +777,7 @@ module.exports = {
     updateTicket,
     addFilesToTicket,
     deleteTicketFile,
-    
+    getFileInfo,
     // Справочники
     getProblemTypes,
     getCabinets,

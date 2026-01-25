@@ -152,6 +152,57 @@ app.get('/api/tickets/:id/files/:fileNumber/download', requireAuth, async (req, 
     try {
         const { id: ticketId, fileNumber } = req.params;
         
+        // Получаем заявку
+        const ticket = await db.getTicketById(ticketId, req.session.user.id);
+        if (!ticket) {
+            return res.status(404).json({ error: 'Заявка не найдена' });
+        }
+        
+        // Проверка прав доступа
+        const isOwner = ticket.user_id === req.session.user.id;
+        const isAdmin = req.session.user.role === 'admin';
+        
+        if (!isOwner && !isAdmin) {
+            return res.status(403).json({ error: 'Нет доступа к этой заявке' });
+        }
+        
+        // Получаем информацию о файле из FS
+        const fileInfo = await fsService.getFileInfo(fileNumber);
+        if (!fileInfo.success) {
+            return res.status(404).json({ error: 'Файл не найден в хранилище' });
+        }
+        
+        // Проверяем, что файл принадлежит этой заявке (по описанию)
+        if (!fileInfo.description || !fileInfo.description.includes(`Заявка #${ticketId}`)) {
+            return res.status(403).json({ error: 'Файл не принадлежит этой заявке' });
+        }
+        
+        // Перенаправляем на прямую ссылку скачивания с токеном
+        const downloadUrl = `${process.env.FS_BASE_URL}/api/download/${fileNumber}?token=${process.env.FS_TOKEN}`;
+        
+        // Если запрос из браузера - перенаправляем
+        if (req.headers.accept?.includes('text/html') || !req.xhr) {
+            return res.redirect(downloadUrl);
+        }
+        
+        // Для API запросов возвращаем информацию
+        res.json({
+            success: true,
+            file: fileInfo,
+            downloadUrl: downloadUrl,
+            filename: fileInfo.original_filename
+        });
+        
+    } catch (error) {
+        console.error('Download file error:', error);
+        res.status(500).json({ error: 'Ошибка при скачивании файла' });
+    }
+});
+// Получение информации о файле
+app.get('/api/tickets/:id/files/:fileNumber/info', requireAuth, async (req, res) => {
+    try {
+        const { id: ticketId, fileNumber } = req.params;
+        
         const ticket = await db.getTicketById(ticketId, req.session.user.id);
         if (!ticket) {
             return res.status(404).json({ error: 'Заявка не найдена' });
@@ -164,27 +215,44 @@ app.get('/api/tickets/:id/files/:fileNumber/download', requireAuth, async (req, 
             return res.status(403).json({ error: 'Нет доступа к этой заявке' });
         }
         
-        // Перенаправляем на FS с токеном
-        const downloadUrl = `${process.env.FS_BASE_URL}/api/download/${fileNumber}`;
-        
-        // Для браузеров - перенаправление
-        if (req.headers.accept?.includes('text/html')) {
-            return res.redirect(downloadUrl);
+        // Получаем файлы заявки
+        let files = [];
+        if (ticket.files) {
+            if (typeof ticket.files === 'string') {
+                try {
+                    files = JSON.parse(ticket.files);
+                } catch (e) {
+                    files = [];
+                }
+            } else {
+                files = ticket.files;
+            }
         }
         
-        // Для API - возвращаем URL
-        res.json({ 
-            success: true, 
-            downloadUrl: downloadUrl,
-            directUrl: `${process.env.FS_BASE_URL}/api/download/${fileNumber}?token=${process.env.FS_TOKEN?.substring(0, 8)}...`
+        // Ищем файл в списке
+        const file = files.find(f => f.fileNumber === fileNumber);
+        if (!file) {
+            return res.status(404).json({ error: 'Файл не найден в заявке' });
+        }
+        
+        // Получаем дополнительную информацию из FS
+        const fsInfo = await fsService.getFileInfo(fileNumber);
+        
+        res.json({
+            success: true,
+            file: {
+                ...file,
+                fsInfo: fsInfo.success ? fsInfo : null
+            },
+            downloadUrl: `/api/tickets/${ticketId}/files/${fileNumber}/download`,
+            directUrl: fsService.getDownloadUrl(fileNumber)
         });
         
     } catch (error) {
-        console.error('Download file error:', error);
-        res.status(500).json({ error: 'Ошибка при скачивании файла' });
+        console.error('Get file info error:', error);
+        res.status(500).json({ error: 'Ошибка при получении информации о файле' });
     }
 });
-
 // ========== СПРАВОЧНИКИ ==========
 
 // Типы проблем
@@ -322,6 +390,8 @@ app.get('/admin', requireAuth, requireAdmin, (req, res) => {
 app.get('/ticket/:id', requireAuth, (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'ticket-details.html'));
 });
+// файл:
+app.get('/api/tickets/:ticketId/files/:fileNumber', requireAuth, tickets.getFileInfo);
 
 // Документация API
 app.get('/api/docs', (req, res) => {
