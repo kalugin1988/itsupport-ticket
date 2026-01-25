@@ -1,0 +1,25 @@
+version: '3.8'
+networks:
+  applications:
+    external: true
+services:
+  itsupport-ticket:
+    build: .
+    image: itsupport-ticket
+    container_name: itsupport-ticket
+    ports:
+      - "3000:3000"
+    restart: always
+    environment:
+      - TZ=Asia/Yekaterinburg
+    networks:
+      - applications
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "http://localhost:3000"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+#docker-compose up -d --build
+# docker-compose build --no-cache && docker-compose up -d
