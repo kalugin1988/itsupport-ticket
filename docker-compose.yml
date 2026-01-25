@@ -21,5 +21,7 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-#docker-compose up -d --build
+# docker network create applications
+# docker-compose up -d --build
 # docker-compose build --no-cache && docker-compose up -d
+# docker system prune -af
